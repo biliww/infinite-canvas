@@ -1,6 +1,8 @@
 name: Docker image (my)
 
 on:
+  push:
+    branches: ["main-my"]
   workflow_dispatch:
 
 permissions:

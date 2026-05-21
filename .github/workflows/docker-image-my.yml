@@ -44,8 +44,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-          attestations:
-            sbom: false
+          sbom: false
 
   build-arm64:
     runs-on: ubuntu-24.04-arm
@@ -78,8 +77,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-          attestations:
-            sbom: false
+          sbom: false
 
   merge-manifest:
     needs: [build-amd64, build-arm64]

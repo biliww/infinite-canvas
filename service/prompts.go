@@ -48,6 +48,13 @@ func DeletePrompt(id string) error {
 	return repository.DeletePrompt(id)
 }
 
+func DeletePrompts(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return repository.DeletePrompts(ids)
+}
+
 func promptCategoryCodes(items []model.PromptCategory) []string {
 	codes := []string{}
 	for _, item := range items {

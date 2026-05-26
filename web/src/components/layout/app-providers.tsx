@@ -12,33 +12,33 @@ import { getAntThemeConfig } from "@/lib/app-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 
 const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 30_000,
-      retry: false,
-      refetchOnWindowFocus: false,
+    defaultOptions: {
+        queries: {
+            staleTime: 30_000,
+            retry: false,
+            refetchOnWindowFocus: false,
+        },
     },
-  },
 });
 
 export function AppProviders({ children }: { children: ReactNode }) {
-  const theme = useThemeStore((state) => state.theme);
-  const dark = theme === "dark";
+    const theme = useThemeStore((state) => state.theme);
+    const dark = theme === "dark";
 
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-    document.documentElement.style.colorScheme = theme;
-  }, [dark, theme]);
+    useEffect(() => {
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = theme;
+    }, [dark, theme]);
 
-  return (
-    <ConfigProvider locale={zhCN} theme={getAntThemeConfig(dark)}>
-      <ProConfigProvider dark={dark}>
-        <App>
-          <QueryClientProvider client={queryClient}>
-            <ClientRootInit>{children}</ClientRootInit>
-          </QueryClientProvider>
-        </App>
-      </ProConfigProvider>
-    </ConfigProvider>
-  );
+    return (
+        <ConfigProvider locale={zhCN} theme={getAntThemeConfig(dark)}>
+            <ProConfigProvider dark={dark}>
+                <App>
+                    <QueryClientProvider client={queryClient}>
+                        <ClientRootInit>{children}</ClientRootInit>
+                    </QueryClientProvider>
+                </App>
+            </ProConfigProvider>
+        </ConfigProvider>
+    );
 }

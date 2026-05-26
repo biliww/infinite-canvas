@@ -15,5 +15,6 @@ func main() {
 	if err := service.EnsureDefaultAdmin(); err != nil {
 		log.Fatal(err)
 	}
+	service.StartPromptSyncScheduler()
 	log.Fatal(router.New().Run(":" + config.Cfg.Port))
 }

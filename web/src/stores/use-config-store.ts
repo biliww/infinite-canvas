@@ -8,116 +8,124 @@ import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
 
 export type AiConfig = {
-  channelMode: "remote" | "local";
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  imageModel: string;
-  textModel: string;
-  systemPrompt: string;
-  models: string[];
-  quality: string;
-  size: string;
-  count: string;
+    channelMode: "remote" | "local";
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    imageModel: string;
+    videoModel: string;
+    textModel: string;
+    videoSeconds: string;
+    vquality: string;
+    systemPrompt: string;
+    models: string[];
+    quality: string;
+    size: string;
+    count: string;
 };
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 
 export const defaultConfig: AiConfig = {
-  channelMode: "remote",
-  baseUrl: "https://api.openai.com",
-  apiKey: "",
-  model: "gpt-image-2",
-  imageModel: "gpt-image-2",
-  textModel: "gpt-5.5",
-  systemPrompt: "",
-  models: [],
-  quality: "auto",
-  size: "1:1",
-  count: "1",
+    channelMode: "local",
+    baseUrl: "https://api.openai.com",
+    apiKey: "",
+    model: "gpt-image-2",
+    imageModel: "gpt-image-2",
+    videoModel: "grok-imagine-video",
+    textModel: "gpt-5.5",
+    videoSeconds: "6",
+    vquality: "720",
+    systemPrompt: "",
+    models: [],
+    quality: "auto",
+    size: "1:1",
+    count: "1",
 };
 
 type ConfigStore = {
-  config: AiConfig;
-  publicSettings: AdminPublicSettings | null;
-  isPublicSettingsLoading: boolean;
-  isConfigOpen: boolean;
-  shouldPromptContinue: boolean;
-  updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
-  loadPublicSettings: () => Promise<void>;
-  isAiConfigReady: (config: AiConfig, model: string) => boolean;
-  openConfigDialog: (shouldPromptContinue?: boolean) => void;
-  setConfigDialogOpen: (isOpen: boolean) => void;
-  clearPromptContinue: () => void;
+    config: AiConfig;
+    publicSettings: AdminPublicSettings | null;
+    isPublicSettingsLoading: boolean;
+    isConfigOpen: boolean;
+    shouldPromptContinue: boolean;
+    updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+    loadPublicSettings: () => Promise<void>;
+    isAiConfigReady: (config: AiConfig, model: string) => boolean;
+    openConfigDialog: (shouldPromptContinue?: boolean) => void;
+    setConfigDialogOpen: (isOpen: boolean) => void;
+    clearPromptContinue: () => void;
 };
 
 function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null) {
-  const channelMode = modelChannel?.allowCustomChannel ? config.channelMode : "remote";
-  if (channelMode === "local" || !modelChannel) return { ...config, channelMode };
-  const models = modelChannel.availableModels;
-  return {
-    ...config,
-    channelMode,
-    models,
-    model: models.includes(config.model) ? config.model : modelChannel.defaultModel,
-    imageModel: models.includes(config.imageModel) ? config.imageModel : modelChannel.defaultImageModel || modelChannel.defaultModel,
-    textModel: models.includes(config.textModel) ? config.textModel : modelChannel.defaultTextModel || modelChannel.defaultModel,
-    systemPrompt: modelChannel.systemPrompt,
-  };
+    const channelMode = modelChannel?.allowCustomChannel ? config.channelMode : "remote";
+    if (channelMode === "local" || !modelChannel) return { ...config, channelMode };
+    const models = modelChannel.availableModels;
+    const fallbackModel = modelChannel.defaultModel || models[0] || "";
+    return {
+        ...config,
+        channelMode,
+        models,
+        model: models.includes(config.model) ? config.model : fallbackModel,
+        imageModel: models.includes(config.imageModel) ? config.imageModel : modelChannel.defaultImageModel || fallbackModel,
+        videoModel: models.includes(config.videoModel) ? config.videoModel : modelChannel.defaultVideoModel || fallbackModel,
+        textModel: models.includes(config.textModel) ? config.textModel : modelChannel.defaultTextModel || fallbackModel,
+        systemPrompt: modelChannel.systemPrompt,
+    };
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
-  return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(config.baseUrl.trim() && config.apiKey.trim()));
+    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(config.baseUrl.trim() && config.apiKey.trim()));
 }
 
 export const useConfigStore = create<ConfigStore>()(
-  persist(
-    (set, get) => ({
-      config: defaultConfig,
-      publicSettings: null,
-      isPublicSettingsLoading: false,
-      isConfigOpen: false,
-      shouldPromptContinue: false,
-      updateConfig: (key, value) =>
-        set((state) => ({
-          config: {
-            ...state.config,
-            [key]: value,
-          },
-        })),
-      loadPublicSettings: async () => {
-        if (get().isPublicSettingsLoading) return;
-        set({ isPublicSettingsLoading: true });
-        try {
-          set({ publicSettings: await apiGet<AdminPublicSettings>("/api/settings") });
-        } finally {
-          set({ isPublicSettingsLoading: false });
-        }
-      },
-      isAiConfigReady: (config, model) => isAiConfigReady(config, model),
-      openConfigDialog: (shouldPromptContinue = false) => set({ isConfigOpen: true, shouldPromptContinue }),
-      setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
-      clearPromptContinue: () => set({ shouldPromptContinue: false }),
-    }),
-    {
-      name: CONFIG_STORE_KEY,
-      partialize: (state) => ({ config: state.config }),
-      merge: (persisted, current) => {
-        const config = { ...defaultConfig, ...((persisted as Partial<ConfigStore>).config || {}) };
-        return { ...current, config: { ...config, channelMode: config.channelMode || "remote", imageModel: config.imageModel || config.model, textModel: config.textModel || config.model } };
-      },
-    },
-  ),
+    persist(
+        (set, get) => ({
+            config: defaultConfig,
+            publicSettings: null,
+            isPublicSettingsLoading: false,
+            isConfigOpen: false,
+            shouldPromptContinue: false,
+            updateConfig: (key, value) =>
+                set((state) => ({
+                    config: {
+                        ...state.config,
+                        [key]: value,
+                    },
+                })),
+            loadPublicSettings: async () => {
+                if (get().isPublicSettingsLoading) return;
+                set({ isPublicSettingsLoading: true });
+                try {
+                    set({ publicSettings: await apiGet<AdminPublicSettings>("/api/settings") });
+                } finally {
+                    set({ isPublicSettingsLoading: false });
+                }
+            },
+            isAiConfigReady: (config, model) => isAiConfigReady(config, model),
+            openConfigDialog: (shouldPromptContinue = false) => set({ isConfigOpen: true, shouldPromptContinue }),
+            setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
+            clearPromptContinue: () => set({ shouldPromptContinue: false }),
+        }),
+        {
+            name: CONFIG_STORE_KEY,
+            partialize: (state) => ({ config: state.config }),
+            merge: (persisted, current) => {
+                const config = { ...defaultConfig, ...((persisted as Partial<ConfigStore>).config || {}) };
+                return { ...current, config: { ...config, channelMode: config.channelMode || "remote", imageModel: config.imageModel || config.model, videoModel: config.videoModel || "grok-imagine-video", textModel: config.textModel || config.model, videoSeconds: config.videoSeconds || "6", vquality: config.vquality || "720" } };
+            },
+        },
+    ),
 );
 
 export function useEffectiveConfig() {
-  const config = useConfigStore((state) => state.config);
-  const modelChannel = useConfigStore((state) => state.publicSettings?.modelChannel || null);
-  return useMemo(() => resolveEffectiveConfig(config, modelChannel), [config, modelChannel]);
+    const config = useConfigStore((state) => state.config);
+    const modelChannel = useConfigStore((state) => state.publicSettings?.modelChannel || null);
+    return useMemo(() => resolveEffectiveConfig(config, modelChannel), [config, modelChannel]);
 }
 
 export function buildApiUrl(baseUrl: string, path: string) {
-  const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
-  const apiBaseUrl = normalizedBaseUrl.endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
-  return `${apiBaseUrl}${path}`;
+    const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+    const apiBaseUrl = normalizedBaseUrl.endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
+    return `${apiBaseUrl}${path}`;
 }

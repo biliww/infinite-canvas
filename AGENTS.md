@@ -59,6 +59,7 @@
 - 优先使用 `canvasThemes`、`useThemeStore` 或 Ant Design `ConfigProvider` token。
 - 不要硬编码黑白、stone、slate 等颜色导致浅色/深色主题不一致。
 - 新增画布按钮、弹窗、浮层时，尽量复用已有工具栏、节点面板、Modal 的视觉风格。
+- 画布顶部工具栏和状态信息优先采用极简扁平风格：无边框、无阴影、无胶囊背景，融入整体背景，弱化按钮感，仅保留轻微 hover 反馈，保持简洁现代、低视觉重量。
 - 图片节点尺寸逻辑要尊重原始比例，除非功能明确要求自由变形。
 - 批量生成、多图展示、助手面板等画布交互要尽量简洁，不要占用过多画布空间。
 
@@ -68,7 +69,7 @@
 - 详细功能介绍写到 `docs/features.md`。
 - 后续待办写到 `docs/todo.md`。
 - 已实现但还需要用户测试确认的事项写到 `docs/pending-test.md`。
-- 面向用户的新增、调整、修复等版本变更写到根目录 `CHANGELOG.md` 的 `Unreleased` 中。
+- `docs/pending-test.md` 用来记录这个版本实际做了哪些可测试变更；`CHANGELOG.md` 的 `Unreleased` 只保留对这些变更的版本级归纳，避免逐条照搬实现细节。
 - 每次 todo 事项完成后，先从 `docs/todo.md` 移到 `docs/pending-test.md`，不要直接写进正式功能说明；用户确认测试通过后再更新 `docs/features.md`。
 - 每次任务完成前，都要根据实际变更检查并更新 `docs/todo.md` 和 `docs/pending-test.md`；如果功能或待办没有变化，也要确认无需修改。
 - 接口响应规则写到 `docs/api-response.md`。

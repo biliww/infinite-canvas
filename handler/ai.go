@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -25,6 +26,38 @@ func AIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/chat/completions")
 }
 
+func AIVideos(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/videos")
+}
+
+func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
+	proxyAIGetRequest(w, r, "/videos/"+id)
+}
+
+func AIVideoContent(w http.ResponseWriter, r *http.Request, id string) {
+	proxyAIGetRequest(w, r, "/videos/"+id+"/content")
+}
+
+func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
+	modelName := r.URL.Query().Get("model")
+	if strings.TrimSpace(modelName) == "" {
+		modelName = "grok-imagine-video"
+	}
+	channel, err := service.SelectModelChannel(modelName)
+	if err != nil {
+		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	request, err := http.NewRequest(http.MethodGet, service.BuildModelChannelURL(channel, path), nil)
+	if err != nil {
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	copyAIResponse(w, request, nil)
+}
+
 func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	body, contentType, modelName, err := readAIRequest(r)
 	if err != nil {
@@ -32,6 +65,18 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		Fail(w, "AI 接口请求失败")
 		return
 	}
+	user, ok := service.UserFromContext(r.Context())
+	if !ok {
+		Fail(w, "未登录或权限不足")
+		return
+	}
+	credits, err := service.ModelCost(modelName)
+	if err != nil {
+		log.Printf("AI proxy read model cost failed: model=%s err=%v", modelName, err)
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	credits *= readAIRequestCount(body, contentType)
 	channel, err := service.SelectModelChannel(modelName)
 	if err != nil {
 		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
@@ -48,9 +93,24 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
+	if err := service.ConsumeUserCredits(user.ID, modelName, credits, path); err != nil {
+		FailError(w, err)
+		return
+	}
+	copyAIResponse(w, request, func() {
+		if err := service.RefundUserCredits(user.ID, modelName, credits, path); err != nil {
+			log.Printf("AI proxy refund credits failed: user=%s model=%s credits=%d err=%v", user.ID, modelName, credits, err)
+		}
+	})
+}
+
+func copyAIResponse(w http.ResponseWriter, request *http.Request, onFailure func()) {
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		log.Printf("AI proxy request failed: url=%s err=%v", request.URL.String(), err)
+		if onFailure != nil {
+			onFailure()
+		}
 		Fail(w, "AI 接口请求失败")
 		return
 	}
@@ -59,6 +119,9 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if response.StatusCode >= http.StatusBadRequest {
 		payload, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		log.Printf("AI upstream error: url=%s status=%d body=%s", request.URL.String(), response.StatusCode, strings.TrimSpace(string(payload)))
+		if onFailure != nil {
+			onFailure()
+		}
 		Fail(w, "AI 接口请求失败")
 		return
 	}
@@ -112,6 +175,34 @@ func readMultipartModel(body []byte, contentType string) string {
 		return values[0]
 	}
 	return ""
+}
+
+func readAIRequestCount(body []byte, contentType string) int {
+	count := 1
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		_, params, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			return count
+		}
+		form, err := multipart.NewReader(bytes.NewReader(body), params["boundary"]).ReadForm(32 << 20)
+		if err != nil {
+			return count
+		}
+		defer form.RemoveAll()
+		if values := form.Value["n"]; len(values) > 0 {
+			_, _ = fmt.Sscan(values[0], &count)
+		}
+	} else {
+		var payload struct {
+			N int `json:"n"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		count = payload.N
+	}
+	if count < 1 {
+		return 1
+	}
+	return count
 }
 
 var errMissingModel = &aiError{"缺少模型名称"}

@@ -20,6 +20,7 @@ const (
 	awesomeGpt4oImagePromptsBase = "https://raw.githubusercontent.com/ImgEdify/Awesome-GPT4o-Image-Prompts/main"
 	youMindGptImage2RawBase      = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main"
 	youMindNanoBananaProRawBase  = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts/main"
+	davidWuGptImage2RawBase      = "https://raw.githubusercontent.com/davidwuw0811-boop/awesome-gpt-image2-prompts/main"
 )
 
 var gptImage2CaseFiles = []string{"README.md", "cases/ad-creative.md", "cases/character.md", "cases/comparison.md", "cases/ecommerce.md", "cases/portrait.md", "cases/poster.md", "cases/ui.md"}
@@ -32,6 +33,20 @@ type gptImage2Data struct {
 		Category string `json:"category"`
 		AddedAt  string `json:"added_at"`
 	} `json:"records"`
+}
+
+type davidWuGptImage2Prompt struct {
+	ID         int    `json:"id"`
+	TitleEN    string `json:"title_en"`
+	TitleCN    string `json:"title_cn"`
+	Category   string `json:"category"`
+	CategoryCN string `json:"category_cn"`
+	Prompt     string `json:"prompt"`
+	Note       string `json:"note"`
+	Author     string `json:"author"`
+	Source     string `json:"source"`
+	NeedsRef   bool   `json:"needs_ref"`
+	Image      string `json:"image"`
 }
 
 func SyncPromptCategory(category string) ([]model.PromptCategory, error) {
@@ -63,6 +78,8 @@ func buildPromptCategory(category string) ([]model.Prompt, error) {
 		return buildYouMindGptImage2Prompts()
 	case "youmind-nano-banana-pro":
 		return buildYouMindNanoBananaProPrompts()
+	case "davidwu-gpt-image2-prompts":
+		return buildDavidWuGptImage2Prompts()
 	}
 	return nil, errors.New("未知提示词分类")
 }
@@ -173,6 +190,31 @@ func buildYouMindNanoBananaProPrompts() ([]model.Prompt, error) {
 	return buildYouMindPrompts(youMindNanoBananaProRawBase, "youmind-nano-banana-pro", "nano-banana-pro")
 }
 
+func buildDavidWuGptImage2Prompts() ([]model.Prompt, error) {
+	raw, err := fetchText(davidWuGptImage2RawBase, "prompts.json")
+	if err != nil {
+		return nil, err
+	}
+	data := []davidWuGptImage2Prompt{}
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return nil, err
+	}
+	items := []model.Prompt{}
+	for _, item := range data {
+		title := strings.TrimSpace(item.TitleCN)
+		if title == "" {
+			title = strings.TrimSpace(item.TitleEN)
+		}
+		prompt := strings.TrimSpace(item.Prompt)
+		if title == "" || prompt == "" {
+			continue
+		}
+		image := absoluteImage(davidWuGptImage2RawBase, item.Image)
+		items = append(items, model.Prompt{ID: "davidwu-gpt-image2-prompts-" + leftPad(item.ID), Title: title, CoverURL: image, Prompt: prompt, Tags: davidWuGptImage2Tags(item), Preview: davidWuGptImage2Preview(item, image)})
+	}
+	return items, nil
+}
+
 func buildYouMindPrompts(baseURL, idPrefix, modelTag string) ([]model.Prompt, error) {
 	markdown, err := fetchText(baseURL, "README_zh.md")
 	if err != nil {
@@ -232,6 +274,28 @@ func youMindTags(title, modelTag string) []string {
 		tags = append(tags, tagsFromHeading(parts[0])...)
 	}
 	return tags
+}
+
+func davidWuGptImage2Tags(item davidWuGptImage2Prompt) []string {
+	tags := splitTags(strings.Join([]string{item.CategoryCN, item.Category, item.Author, item.Source}, "/"), `/`)
+	if item.NeedsRef {
+		tags = append(tags, "需要参考图")
+	}
+	return tags
+}
+
+func davidWuGptImage2Preview(item davidWuGptImage2Prompt, image string) string {
+	lines := []string{}
+	if item.TitleEN != "" {
+		lines = append(lines, item.TitleEN)
+	}
+	if item.Note != "" {
+		lines = append(lines, item.Note)
+	}
+	if image != "" {
+		lines = append(lines, "![]("+image+")")
+	}
+	return strings.Join(lines, "\n\n")
 }
 
 func splitTags(value string, pattern string) []string {

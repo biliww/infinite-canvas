@@ -7,3 +7,4 @@
 | https://github.com/ImgEdify/Awesome-GPT4o-Image-Prompts | 已实现同步逻辑 |
 | https://github.com/YouMind-OpenLab/awesome-gpt-image-2 | 已实现同步逻辑 |
 | https://github.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts | 已实现同步逻辑 |
+| https://github.com/davidwuw0811-boop/awesome-gpt-image2-prompts | 已实现同步逻辑 |

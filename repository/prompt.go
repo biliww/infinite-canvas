@@ -99,6 +99,15 @@ func DeletePrompt(id string) error {
 	return db.Delete(&model.Prompt{}, "id = ?", id).Error
 }
 
+// DeletePrompts 批量删除提示词。
+func DeletePrompts(ids []string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Delete(&model.Prompt{}, "id IN ?", ids).Error
+}
+
 // ReplacePromptCategory 用远程同步结果替换整个提示词分类。
 func ReplacePromptCategory(category model.PromptCategory, items []model.Prompt) error {
 	db, err := DB()

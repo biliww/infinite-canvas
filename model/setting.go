@@ -21,24 +21,59 @@ type ModelChannel struct {
 	Remark   string   `json:"remark"`
 }
 
+// ModelCost 模型算力点配置。
+type ModelCost struct {
+	Model   string `json:"model"`
+	Credits int    `json:"credits"`
+}
+
 // PublicModelChannelSetting 公开模型渠道配置。
 type PublicModelChannelSetting struct {
-	AvailableModels    []string `json:"availableModels"`
-	DefaultModel       string   `json:"defaultModel"`
-	DefaultImageModel  string   `json:"defaultImageModel"`
-	DefaultTextModel   string   `json:"defaultTextModel"`
-	SystemPrompt       string   `json:"systemPrompt"`
-	AllowCustomChannel bool     `json:"allowCustomChannel"`
+	AvailableModels    []string    `json:"availableModels"`
+	ModelCosts         []ModelCost `json:"modelCosts"`
+	DefaultModel       string      `json:"defaultModel"`
+	DefaultImageModel  string      `json:"defaultImageModel"`
+	DefaultVideoModel  string      `json:"defaultVideoModel"`
+	DefaultTextModel   string      `json:"defaultTextModel"`
+	SystemPrompt       string      `json:"systemPrompt"`
+	AllowCustomChannel *bool       `json:"allowCustomChannel"`
 }
 
 // PublicSetting 公开配置。
 type PublicSetting struct {
 	ModelChannel PublicModelChannelSetting `json:"modelChannel"`
+	Auth         PublicAuthSetting         `json:"auth"`
+}
+
+type PublicAuthSetting struct {
+	AllowRegister *bool                    `json:"allowRegister"`
+	LinuxDo       PublicLinuxDoAuthSetting `json:"linuxDo"`
+}
+
+type PublicLinuxDoAuthSetting struct {
+	Enabled bool `json:"enabled"`
 }
 
 // PrivateSetting 私有配置。
 type PrivateSetting struct {
-	Channels []ModelChannel `json:"channels"`
+	Channels   []ModelChannel     `json:"channels"`
+	PromptSync PromptSyncSetting  `json:"promptSync"`
+	Auth       PrivateAuthSetting `json:"auth"`
+}
+
+// PromptSyncSetting 提示词定时同步配置。
+type PromptSyncSetting struct {
+	Enabled *bool  `json:"enabled"`
+	Cron    string `json:"cron"`
+}
+
+type PrivateAuthSetting struct {
+	LinuxDo PrivateLinuxDoAuthSetting `json:"linuxDo"`
+}
+
+type PrivateLinuxDoAuthSetting struct {
+	ClientID     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret"`
 }
 
 // Setting 系统配置。

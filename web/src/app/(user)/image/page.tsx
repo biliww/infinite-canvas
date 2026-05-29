@@ -2,27 +2,33 @@
 
 import { BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { App, AutoComplete, Button, Checkbox, Drawer, Empty, Image, Input, InputNumber, Modal, Select, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Typography } from "antd";
 import localforage from "localforage";
+import { saveAs } from "file-saver";
 
+import { ImageSettingsPanel } from "@/components/image-settings-panel";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
+import { canvasThemes } from "@/lib/canvas-theme";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
-import { uploadImage } from "@/services/image-storage";
+import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import type { ReferenceImage } from "@/types/image";
 
 type GeneratedImage = {
     id: string;
     dataUrl: string;
+    storageKey?: string;
     durationMs: number;
     width: number;
     height: number;
     bytes: number;
+    mimeType?: string;
 };
 
 type GenerationResult = {
@@ -36,8 +42,11 @@ type GenerationLog = {
     id: string;
     createdAt: number;
     title: string;
+    prompt: string;
     time: string;
     model: string;
+    config: GenerationLogConfig;
+    references: ReferenceImage[];
     durationMs: number;
     successCount: number;
     failCount: number;
@@ -45,20 +54,15 @@ type GenerationLog = {
     size: string;
     quality: string;
     status: "成功" | "失败";
+    images: GeneratedImage[];
     thumbnails: string[];
 };
 
+type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "size" | "count">;
+
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
-const sizeOptions = ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"].map((value) => ({ label: value, value }));
-const qualityOptions = [
-    { label: "auto", value: "auto" },
-    { label: "low / 1K", value: "low" },
-    { label: "medium / 2K", value: "medium" },
-    { label: "high / 4K", value: "high" },
-];
 const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
-const LOG_STORE_PREFIX = `${LOG_STORE_KEY}:`;
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 
 export default function ImagePage() {
@@ -162,16 +166,23 @@ export default function ImagePage() {
         const failed = result.find((item): item is PromiseRejectedResult => item.status === "rejected");
 
         try {
+            const logImages = await Promise.all(
+                successImages.map(async (image) => {
+                    const stored = await uploadImage(image.dataUrl);
+                    return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
+                }),
+            );
             saveLog(
                 buildLog({
                     prompt: text,
                     model,
                     config: { ...snapshot.config, count: String(generationCount) },
+                    references: snapshot.references,
                     durationMs: performance.now() - batchStartedAt,
                     successCount,
                     failCount,
                     status: successCount ? "成功" : "失败",
-                    thumbnails: successImages.map((image) => image.dataUrl),
+                    images: logImages,
                 }),
             );
             successCount ? message.success("图片已生成") : message.error(failed?.reason instanceof Error ? failed.reason.message : "生成失败");
@@ -181,10 +192,7 @@ export default function ImagePage() {
     };
 
     const downloadImage = (image: GeneratedImage, index: number) => {
-        const link = document.createElement("a");
-        link.href = image.dataUrl;
-        link.download = `image-${index + 1}.png`;
-        link.click();
+        saveAs(image.dataUrl, `image-${index + 1}.png`);
     };
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
@@ -228,7 +236,8 @@ export default function ImagePage() {
     };
 
     const deleteSelectedLogs = () => {
-        void Promise.all(selectedLogIds.map((id) => logStore.removeItem(id))).then(refreshLogs);
+        const imageKeys = logs.filter((log) => selectedLogIds.includes(log.id)).flatMap((log) => log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)));
+        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
@@ -238,7 +247,7 @@ export default function ImagePage() {
     };
 
     const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, log).then(refreshLogs);
+        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
     };
 
     const refreshLogs = async () => setLogs(await readStoredLogs());
@@ -246,13 +255,13 @@ export default function ImagePage() {
     const previewGenerationLog = async (log: GenerationLog) => {
         setPreviewLog(log);
         setLogsOpen(false);
-        const images = await Promise.all(
-            log.thumbnails.map(async (dataUrl, index) => {
-                const meta = await readImageMeta(dataUrl);
-                return { id: `${log.id}-${index}`, dataUrl, durationMs: log.durationMs, width: meta.width, height: meta.height, bytes: getDataUrlByteSize(dataUrl) };
-            }),
-        );
-        setResults(images.map((image) => ({ id: image.id, status: "success", image })));
+        setPrompt(log.prompt);
+        setReferences(log.references || []);
+        if (log.config.imageModel || log.model) updateConfig("imageModel", log.config.imageModel || log.model);
+        if (log.config.quality) updateConfig("quality", log.config.quality);
+        if (log.config.size) updateConfig("size", log.config.size);
+        if (log.config.count) updateConfig("count", log.config.count);
+        setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
     };
 
     const buildRequestSnapshot = () => {
@@ -450,8 +459,8 @@ export default function ImagePage() {
                     onPreviewLog={(log) => void previewGenerationLog(log)}
                 />
             </Drawer>
-            <Drawer title="参数" placement="bottom" size="default" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
-                <div className="grid grid-cols-2 gap-3">
+            <Drawer title="参数" placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+                <div className="grid grid-cols-2 gap-3 pb-4">
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                 </div>
             </Drawer>
@@ -465,24 +474,17 @@ export default function ImagePage() {
 }
 
 function GenerationSettings({ config, model, updateConfig, openConfigDialog }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+
     return (
         <>
             <label className="col-span-2 block min-w-0 sm:col-span-1">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">模型</span>
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("imageModel", value)} fullWidth onMissingConfig={() => openConfigDialog(false)} />
             </label>
-            <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">生成次数</span>
-                <InputNumber className="canvas-control-number !w-full" min={1} max={10} value={Number(config.count) || 1} onChange={(value) => updateConfig("count", String(value || 1))} />
-            </label>
-            <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">尺寸</span>
-                <AutoComplete className="canvas-control-select w-full" value={config.size} options={sizeOptions} placeholder="例如 1:1、3:2" onChange={(value) => updateConfig("size", value)} />
-            </label>
-            <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">质量</span>
-                <Select className="canvas-control-select w-full" value={config.quality} options={qualityOptions} onChange={(value) => updateConfig("quality", value)} />
-            </label>
+            <div className="col-span-2">
+                <ImageSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" maxCount={10} />
+            </div>
         </>
     );
 }
@@ -673,47 +675,68 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
 async function readStoredLogs() {
     if (typeof window === "undefined") return [];
     try {
-        const legacyValue = window.localStorage.getItem(LOG_STORE_KEY);
-        if (legacyValue) {
-            await Promise.all((JSON.parse(legacyValue) as GenerationLog[]).map((log) => logStore.setItem(log.id, normalizeLog(log))));
-            window.localStorage.removeItem(LOG_STORE_KEY);
-        }
-        const legacyKeys = Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index)).filter((key): key is string => Boolean(key?.startsWith(LOG_STORE_PREFIX)));
-        await Promise.all(
-            legacyKeys.map(async (key) => {
-                try {
-                    const log = normalizeLog(JSON.parse(window.localStorage.getItem(key) || ""));
-                    await logStore.setItem(log.id, log);
-                    window.localStorage.removeItem(key);
-                } catch {}
-            }),
-        );
-
-        const logs: GenerationLog[] = [];
+        const values: GenerationLog[] = [];
         await logStore.iterate<GenerationLog, void>((value) => {
-            logs.push(normalizeLog(value));
+            values.push(value);
         });
+        const logs = await Promise.all(values.map(normalizeLog));
         return logs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     } catch {
         return [];
     }
 }
 
-function normalizeLog(log: Partial<GenerationLog>): GenerationLog {
+async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog> {
+    const references = await Promise.all(
+        (log.references || []).map(async (item) => ({
+            ...item,
+            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
+        })),
+    );
+    const images = await Promise.all(
+        (log.images || []).map(async (item) => ({
+            ...item,
+            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
+        })),
+    );
+    const config = normalizeLogConfig(log);
     return {
         id: log.id || nanoid(),
         createdAt: log.createdAt || Date.now(),
         title: log.title || log.model || "未命名",
+        prompt: log.prompt || log.title || "",
         time: log.time || new Date().toLocaleString("zh-CN", { hour12: false }),
-        model: log.model || "",
+        model: log.model || config.imageModel || "",
+        config,
+        references,
         durationMs: log.durationMs || 0,
         successCount: log.successCount ?? log.imageCount ?? 0,
         failCount: log.failCount || 0,
         imageCount: log.imageCount || log.successCount || 0,
-        size: log.size || "",
-        quality: log.quality || "",
+        size: log.size || config.size || "",
+        quality: log.quality || config.quality || "",
         status: log.status || "成功",
-        thumbnails: log.thumbnails || [],
+        images,
+        thumbnails: images.map((image) => image.dataUrl),
+    };
+}
+
+function serializeLog(log: GenerationLog): GenerationLog {
+    return {
+        ...log,
+        references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
+        images: log.images.map((image) => ({ ...image, dataUrl: image.storageKey ? "" : image.dataUrl })),
+        thumbnails: [],
+    };
+}
+
+function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
+    return {
+        model: log.config?.model || log.model || "",
+        imageModel: log.config?.imageModel || log.model || "",
+        quality: log.config?.quality || log.quality || "",
+        size: log.config?.size || log.size || "",
+        count: log.config?.count || String(log.imageCount || log.successCount || 1),
     };
 }
 
@@ -721,34 +744,47 @@ function buildLog({
     prompt,
     model,
     config,
+    references,
     durationMs,
     successCount,
     failCount,
     status,
-    thumbnails,
+    images,
 }: {
     prompt: string;
     model: string;
-    config: { size: string; quality: string; count?: string };
+    config: GenerationLogConfig;
+    references: ReferenceImage[];
     durationMs: number;
     successCount: number;
     failCount: number;
     status: GenerationLog["status"];
-    thumbnails: string[];
+    images: GeneratedImage[];
 }): GenerationLog {
+    const logConfig = {
+        model: config.model,
+        imageModel: config.imageModel,
+        quality: config.quality,
+        size: config.size,
+        count: config.count,
+    };
     return {
         id: nanoid(),
         createdAt: Date.now(),
         title: prompt.slice(0, 12) || "未命名",
+        prompt,
         time: new Date().toLocaleString("zh-CN", { hour12: false }),
         model,
+        config: logConfig,
+        references,
         durationMs,
         successCount,
         failCount,
-        imageCount: Number(config.count) || successCount,
-        size: config.size,
-        quality: config.quality,
+        imageCount: Number(logConfig.count) || successCount,
+        size: logConfig.size,
+        quality: logConfig.quality,
         status,
-        thumbnails,
+        images,
+        thumbnails: images.map((image) => image.dataUrl),
     };
 }

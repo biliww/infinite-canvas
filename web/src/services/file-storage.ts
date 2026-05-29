@@ -29,6 +29,28 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     return url;
 }
 
+export async function getMediaBlob(storageKey: string) {
+    return store.getItem<Blob>(storageKey);
+}
+
+export async function setMediaBlob(storageKey: string, blob: Blob) {
+    await store.setItem(storageKey, blob);
+    const url = URL.createObjectURL(blob);
+    objectUrls.set(storageKey, url);
+    return url;
+}
+
+export async function deleteStoredMedia(keys: Iterable<string>) {
+    await Promise.all(
+        Array.from(new Set(keys)).map(async (key) => {
+            const url = objectUrls.get(key);
+            if (url) URL.revokeObjectURL(url);
+            objectUrls.delete(key);
+            await store.removeItem(key);
+        }),
+    );
+}
+
 export async function cleanupUnusedMedia(usedData: unknown) {
     const usedKeys = collectMediaStorageKeys(usedData);
     const unused: string[] = [];

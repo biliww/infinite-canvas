@@ -23,6 +23,8 @@
         "clsx": "^2.1.1",
         "copy-to-clipboard": "^4.0.2",
         "dayjs": "^1.11.20",
+        "fflate": "^0.8.3",
+        "file-saver": "^2.0.5",
         "localforage": "^1.10.0",
         "lucide-react": "^1.16.0",
         "motion": "^12.38.0",
@@ -39,6 +41,7 @@
     },
     "devDependencies": {
         "@tailwindcss/postcss": "^4",
+        "@types/file-saver": "^2.0.7",
         "@types/node": "^20",
         "@types/react": "19.1.12",
         "@types/react-dom": "19.1.9",

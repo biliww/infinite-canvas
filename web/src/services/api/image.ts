@@ -63,6 +63,13 @@ function resolveSize(quality: string, ratio: string): string | undefined {
     return `${width}x${height}`;
 }
 
+function resolveRequestSize(quality: string | undefined, size: string) {
+    const value = size.trim();
+    if (!value || value === "auto") return undefined;
+    if (/^\d+x\d+$/.test(value)) return value;
+    return (quality && resolveSize(quality, value)) || value;
+}
+
 function resolveImageDataUrl(item: Record<string, unknown>) {
     if (typeof item.b64_json === "string" && item.b64_json) {
         return `data:image/png;base64,${item.b64_json}`;
@@ -146,7 +153,7 @@ function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) 
 export async function requestGeneration(config: AiConfig, prompt: string) {
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
-    const pixelSize = quality ? resolveSize(quality, config.size) : undefined;
+    const requestSize = resolveRequestSize(quality, config.size);
     try {
         const response = await axios.post<ImageApiResponse>(
             aiApiUrl(config, "/images/generations"),
@@ -155,7 +162,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
                 prompt: withSystemPrompt(config, prompt),
                 n,
                 ...(quality ? { quality } : {}),
-                ...(pixelSize ? { size: pixelSize } : {}),
+                ...(requestSize ? { size: requestSize } : {}),
                 response_format: "b64_json",
             },
             {
@@ -173,7 +180,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[]) {
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
-    const pixelSize = quality ? resolveSize(quality, config.size) : undefined;
+    const requestSize = resolveRequestSize(quality, config.size);
     const formData = new FormData();
     formData.set("model", config.model);
     formData.set("prompt", withSystemPrompt(config, prompt));
@@ -182,8 +189,8 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (quality) {
         formData.set("quality", quality);
     }
-    if (pixelSize) {
-        formData.set("size", pixelSize);
+    if (requestSize) {
+        formData.set("size", requestSize);
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));

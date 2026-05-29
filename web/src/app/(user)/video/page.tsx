@@ -2,19 +2,23 @@
 
 import { BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { App, AutoComplete, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
+import { saveAs } from "file-saver";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
+import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoSizeLabel } from "@/components/video-settings-panel";
+import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
-import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
-import { uploadImage } from "@/services/image-storage";
+import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
+import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { requestVideoGeneration } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 
 type GeneratedVideo = {
@@ -39,8 +43,11 @@ type GenerationLog = {
     id: string;
     createdAt: number;
     title: string;
+    prompt: string;
     time: string;
     model: string;
+    config: GenerationLogConfig;
+    references: ReferenceImage[];
     durationMs: number;
     size: string;
     resolution: string;
@@ -50,11 +57,10 @@ type GenerationLog = {
     error?: string;
 };
 
+type GenerationLogConfig = Pick<AiConfig, "model" | "videoModel" | "size" | "vquality" | "videoSeconds">;
+
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
-const sizeOptions = ["1280x720", "720x1280", "1024x1024", "1792x1024", "1024x1792"].map((value) => ({ label: value, value }));
-const resolutionOptions = ["720", "480"].map((value) => ({ label: `${value}p`, value }));
-const secondOptions = ["6", "10", "12", "16", "20"].map((value) => ({ label: `${value}s`, value }));
 const LOG_STORE_KEY = "infinite-canvas:video_generation_logs";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 
@@ -150,12 +156,12 @@ export default function VideoPage() {
                 mimeType: stored.mimeType,
             };
             setResults([{ id: nextVideo.id, status: "success", video: nextVideo }]);
-            saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, durationMs: nextVideo.durationMs, status: "成功", video: nextVideo }));
+            saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: nextVideo.durationMs, status: "成功", video: nextVideo }));
             message.success("视频已生成");
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "生成失败";
             setResults([{ id: nanoid(), status: "failed", error: errorMessage }]);
-            saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, durationMs: performance.now() - batchStartedAt, status: "失败", error: errorMessage }));
+            saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: performance.now() - batchStartedAt, status: "失败", error: errorMessage }));
             message.error(errorMessage);
         } finally {
             setRunning(false);
@@ -181,10 +187,7 @@ export default function VideoPage() {
     };
 
     const downloadVideo = (video: GeneratedVideo) => {
-        const link = document.createElement("a");
-        link.href = video.url;
-        link.download = "video.mp4";
-        link.click();
+        saveAs(video.url, "video.mp4");
     };
 
     const saveResultToAssets = (video: GeneratedVideo) => {
@@ -221,7 +224,11 @@ export default function VideoPage() {
     };
 
     const deleteSelectedLogs = () => {
-        void Promise.all(selectedLogIds.map((id) => logStore.removeItem(id))).then(refreshLogs);
+        const mediaKeys = logs
+            .filter((log) => selectedLogIds.includes(log.id))
+            .map((log) => log.video?.storageKey)
+            .filter((key): key is string => Boolean(key));
+        void Promise.all([deleteStoredMedia(mediaKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
@@ -231,7 +238,7 @@ export default function VideoPage() {
     };
 
     const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, log).then(refreshLogs);
+        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
     };
 
     const refreshLogs = async () => setLogs(await readStoredLogs());
@@ -239,6 +246,12 @@ export default function VideoPage() {
     const previewGenerationLog = (log: GenerationLog) => {
         setPreviewLog(log);
         setLogsOpen(false);
+        setPrompt(log.prompt);
+        setReferences(log.references || []);
+        if (log.config.videoModel || log.model) updateConfig("videoModel", log.config.videoModel || log.model);
+        if (log.config.size) updateConfig("size", log.config.size);
+        if (log.config.vquality) updateConfig("vquality", log.config.vquality);
+        if (log.config.videoSeconds) updateConfig("videoSeconds", log.config.videoSeconds);
         setResults(log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || "生成失败" }]);
     };
 
@@ -306,7 +319,7 @@ export default function VideoPage() {
 
                             <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
                                 <span className="truncate text-stone-500 dark:text-stone-400">
-                                    {model} · {normalizeResolution(effectiveConfig.vquality)}p · {normalizeVideoSize(effectiveConfig.size)} · {normalizeVideoSeconds(effectiveConfig.videoSeconds)}s
+                                    {model} · {normalizeResolution(effectiveConfig.vquality)}p · {videoSizeLabel(effectiveConfig.size)} · {normalizeVideoSeconds(effectiveConfig.videoSeconds)}s
                                 </span>
                                 <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
                                     调整
@@ -357,8 +370,8 @@ export default function VideoPage() {
             <Drawer title="生成记录" placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
             </Drawer>
-            <Drawer title="参数" placement="bottom" size="default" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
-                <div className="grid grid-cols-2 gap-3">
+            <Drawer title="参数" placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+                <div className="grid grid-cols-2 gap-3 pb-4">
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                 </div>
             </Drawer>
@@ -372,24 +385,17 @@ export default function VideoPage() {
 }
 
 function GenerationSettings({ config, model, updateConfig, openConfigDialog }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+
     return (
         <>
             <label className="col-span-2 block min-w-0 sm:col-span-1">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">模型</span>
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("videoModel", value)} fullWidth onMissingConfig={() => openConfigDialog(false)} />
             </label>
-            <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">秒数</span>
-                <AutoComplete className="canvas-control-select w-full" value={config.videoSeconds} options={secondOptions} onChange={(value) => updateConfig("videoSeconds", value)} />
-            </label>
-            <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">尺寸</span>
-                <AutoComplete className="canvas-control-select w-full" value={config.size} options={sizeOptions} placeholder="例如 1280x720" onChange={(value) => updateConfig("size", value)} />
-            </label>
-            <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">清晰度</span>
-                <AutoComplete className="canvas-control-select w-full" value={normalizeResolution(config.vquality)} options={resolutionOptions} placeholder="例如 720" onChange={(value) => updateConfig("vquality", value)} />
-            </label>
+            <div className="col-span-2">
+                <VideoSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />
+            </div>
         </>
     );
 }
@@ -536,33 +542,71 @@ async function readStoredLogs() {
 
 async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog> {
     const video = log.video?.storageKey ? { ...log.video, url: await resolveMediaUrl(log.video.storageKey, log.video.url) } : log.video;
+    const references = await Promise.all(
+        (log.references || []).map(async (item) => ({
+            ...item,
+            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
+        })),
+    );
+    const config = normalizeLogConfig(log);
     return {
         id: log.id || nanoid(),
         createdAt: log.createdAt || Date.now(),
         title: log.title || log.model || "未命名",
+        prompt: log.prompt || "",
         time: log.time || new Date().toLocaleString("zh-CN", { hour12: false }),
-        model: log.model || "",
+        model: log.model || config.videoModel || "",
+        config,
+        references,
         durationMs: log.durationMs || 0,
-        size: log.size || "",
-        resolution: normalizeResolution(log.resolution || ""),
-        seconds: log.seconds || "",
+        size: log.size || config.size || "",
+        resolution: normalizeResolution(log.resolution || config.vquality || ""),
+        seconds: log.seconds || config.videoSeconds || "",
         status: log.status || "成功",
         video,
         error: log.error,
     };
 }
 
-function buildLog({ prompt, model, config, durationMs, status, video, error }: { prompt: string; model: string; config: AiConfig; durationMs: number; status: GenerationLog["status"]; video?: GeneratedVideo; error?: string }): GenerationLog {
+function serializeLog(log: GenerationLog): GenerationLog {
+    return {
+        ...log,
+        references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
+        video: log.video?.storageKey ? { ...log.video, url: "" } : log.video,
+    };
+}
+
+function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
+    return {
+        model: log.config?.model || log.model || "",
+        videoModel: log.config?.videoModel || log.model || "",
+        size: log.config?.size || log.size || "",
+        vquality: normalizeResolution(log.config?.vquality || log.resolution || ""),
+        videoSeconds: log.config?.videoSeconds || log.seconds || "",
+    };
+}
+
+function buildLog({ prompt, model, config, references, durationMs, status, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; durationMs: number; status: GenerationLog["status"]; video?: GeneratedVideo; error?: string }): GenerationLog {
+    const logConfig = {
+        model: config.model,
+        videoModel: config.videoModel,
+        size: config.size,
+        vquality: normalizeResolution(config.vquality),
+        videoSeconds: config.videoSeconds,
+    };
     return {
         id: nanoid(),
         createdAt: Date.now(),
         title: prompt.slice(0, 12) || "未命名",
+        prompt,
         time: new Date().toLocaleString("zh-CN", { hour12: false }),
         model,
+        config: logConfig,
+        references,
         durationMs,
-        size: config.size,
-        resolution: normalizeResolution(config.vquality),
-        seconds: config.videoSeconds,
+        size: logConfig.size,
+        resolution: logConfig.vquality,
+        seconds: logConfig.videoSeconds,
         status,
         video,
         error,
@@ -582,13 +626,13 @@ function buildVideoConfig(config: AiConfig, model: string): AiConfig {
 
 function normalizeVideoSeconds(value: string) {
     const seconds = Math.floor(Number(value) || 6);
-    return String([6, 10, 12, 16, 20].includes(seconds) ? seconds : 6);
+    return String(Math.max(1, Math.min(20, seconds)));
 }
 
 function normalizeVideoSize(value: string) {
-    return /^\d+x\d+$/.test(value || "") ? value : "1280x720";
+    return normalizeVideoSizeValue(value);
 }
 
 function normalizeResolution(value: string) {
-    return value.replace(/p$/i, "") || "720";
+    return normalizeVideoResolutionValue(value);
 }

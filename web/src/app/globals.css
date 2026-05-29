@@ -405,6 +405,11 @@
         padding: 18px;
     }
 
+    .canvas-image-settings-popover .ant-popover-inner-content {
+        max-height: calc(100vh - 96px);
+        overflow-y: auto;
+    }
+
     .canvas-image-settings-popover .ant-segmented {
         border-radius: 999px;
         padding: 3px;

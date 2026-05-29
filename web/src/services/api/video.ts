@@ -53,10 +53,11 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 
 function normalizeVideoSeconds(value: string) {
     const seconds = Math.floor(Number(value) || 6);
-    return String([6, 10, 12, 16, 20].includes(seconds) ? seconds : 6);
+    return String(Math.max(1, Math.min(20, seconds)));
 }
 
 function normalizeVideoSize(value: string) {
+    if (value === "auto") return null;
     const size = value || "1280x720";
     if (/^\d+x\d+$/.test(size)) return size;
     return ["9:16", "2:3", "3:4"].includes(size) ? "720x1280" : "1280x720";

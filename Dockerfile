@@ -25,7 +25,7 @@ COPY main.go ./
 RUN go build -o /server .
 
 # 运行镜像：Next.js 对外监听 3000，Go 只在容器内部监听 8080。
-FROM oven/bun:1.3.13
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 COPY VERSION /app/VERSION
@@ -38,4 +38,4 @@ RUN mkdir -p /app/data/prompts
 
 EXPOSE 3000
 # 先启动内部 Go API，再由 Next.js 提供页面并代理 /api/*。
-CMD ["sh", "-c", "PORT=8080 /app/server & cd /app/web && HOSTNAME=0.0.0.0 PORT=3000 bun run start"]
+CMD ["sh", "-c", "PORT=8080 /app/server & cd /app/web && HOSTNAME=0.0.0.0 PORT=3000 npm run start"]

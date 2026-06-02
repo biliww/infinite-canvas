@@ -1,11 +1,11 @@
 services:
   app:
-    image: ghcr.io/basketikun/infinite-canvas:latest
+    image: ghcr.io/biliww/infinite-canvas:latest
     container_name: infinite-canvas
     env_file:
       - .env
     volumes:
       - ./data:/app/data
     ports:
-      - "3000:3000"
+      - "13000:3000"
     restart: unless-stopped

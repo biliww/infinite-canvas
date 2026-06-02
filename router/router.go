@@ -25,6 +25,9 @@ func New() *gin.Engine {
 	v1 := api.Group("/v1", middleware.UserAuth)
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	v1.POST("/images/edits", gin.WrapF(handler.AIImagesEdits))
+	v1.POST("/image-tasks/generations", gin.WrapF(handler.AIImageTaskGeneration))
+	v1.POST("/image-tasks/edits", gin.WrapF(handler.AIImageTaskEdit))
+	v1.GET("/image-tasks", gin.WrapF(handler.AIImageTasks))
 	v1.POST("/chat/completions", gin.WrapF(handler.AIChatCompletions))
 	v1.POST("/videos", gin.WrapF(handler.AIVideos))
 	v1.GET("/videos/:id", func(c *gin.Context) {

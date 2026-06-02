@@ -18,6 +18,20 @@ type ImageApiResponse = {
     code?: number;
     msg?: string;
 };
+type ImageTask = {
+    id?: string;
+    status?: "queued" | "running" | "success" | "error" | string;
+    data?: Array<{ url?: string; revised_prompt?: string }>;
+    error?: string;
+    code?: number;
+    msg?: string;
+};
+type ImageTaskListResponse = {
+    items?: ImageTask[];
+    missing_ids?: string[];
+    code?: number;
+    msg?: string;
+};
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -97,6 +111,13 @@ function parseImagePayload(payload: ImageApiResponse) {
     return images;
 }
 
+// assertApiSuccess 检查本项目后端包装响应，避免错误响应被当成上游成功结果继续处理。
+function assertApiSuccess(payload: { code?: number; msg?: string } | undefined, fallback: string) {
+    if (typeof payload?.code === "number" && payload.code !== 0) {
+        throw new Error(payload.msg || fallback);
+    }
+}
+
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
         const responseData = error.response?.data;
@@ -128,6 +149,13 @@ function aiApiUrl(config: AiConfig, path: string) {
     return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
 }
 
+// aiImageTaskUrl 构造图片任务接口地址，remote 走本项目后端代理，local 直连 chatgpt2api 根路径。
+function aiImageTaskUrl(config: AiConfig, path: string) {
+    if (config.channelMode === "remote") return `/api/v1${path}`;
+    const baseUrl = config.baseUrl.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
+    return `${baseUrl}${path.replace(/^\/image-tasks/, "/api/image-tasks")}`;
+}
+
 function aiHeaders(config: AiConfig, contentType?: string) {
     const token = useUserStore.getState().token;
     return config.channelMode === "remote"
@@ -145,6 +173,116 @@ function refreshRemoteUser(config: AiConfig) {
     if (config.channelMode === "remote") void useUserStore.getState().hydrateUser();
 }
 
+const IMAGE_TASK_POLL_INTERVALS = [2000, 3000, 3000, 5000, 5000];
+const IMAGE_TASK_POLL_DEFAULT_INTERVAL = 5000;
+const IMAGE_TASK_POLL_TIMEOUT_MS = 180_000;
+
+// isImageTaskModel 判断当前 remote 模型是否来自 image_tasks 协议渠道。
+function isImageTaskModel(config: AiConfig) {
+    return config.channelMode === "remote" && config.modelProtocols?.[config.model] === "image_tasks";
+}
+
+// newImageTaskId 生成前后端幂等识别用的客户端任务 ID。
+function newImageTaskId(prefix: "gen" | "edit") {
+    return `ic-${prefix}-${Date.now()}-${nanoid()}`;
+}
+
+// sleep 用于控制图片任务轮询间隔。
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// pollImageTask 轮询单个图片任务，成功后转换为现有调用方使用的图片数组结构。
+async function pollImageTask(config: AiConfig, taskId: string) {
+    const deadline = Date.now() + IMAGE_TASK_POLL_TIMEOUT_MS;
+    let attempt = 0;
+    while (Date.now() < deadline) {
+        const interval = IMAGE_TASK_POLL_INTERVALS[attempt] ?? IMAGE_TASK_POLL_DEFAULT_INTERVAL;
+        await sleep(interval);
+        attempt++;
+
+        const response = await axios.get<ImageTaskListResponse>(
+            aiImageTaskUrl(config, `/image-tasks?ids=${encodeURIComponent(taskId)}&model=${encodeURIComponent(config.model)}`),
+            { headers: aiHeaders(config) },
+        );
+        assertApiSuccess(response.data, "图片任务查询失败");
+
+        const task = response.data.items?.[0];
+        if (!task) {
+            if (response.data.missing_ids?.includes(taskId)) throw new Error("图片任务不存在或已过期");
+            continue;
+        }
+        if (task.status === "success") {
+            const images = (task.data ?? [])
+                .map((item) => item.url)
+                .filter((url): url is string => Boolean(url))
+                .map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            if (!images.length) throw new Error("图片任务完成但没有返回图片");
+            return images;
+        }
+        if (task.status === "error") {
+            throw new Error(task.error || "图片生成失败");
+        }
+    }
+    throw new Error("图片生成超时，请稍后重试");
+}
+
+// requestImageTaskGeneration 提交文生图任务并轮询返回图片 URL。
+async function requestImageTaskGeneration(config: AiConfig, prompt: string, count: number, quality: string | undefined, requestSize: string | undefined) {
+    const taskIds = Array.from({ length: count }, () => newImageTaskId("gen"));
+    try {
+        await Promise.all(
+            taskIds.map((taskId) =>
+                axios
+                    .post<ImageTask>(
+                        aiImageTaskUrl(config, "/image-tasks/generations"),
+                        {
+                            client_task_id: taskId,
+                            model: config.model,
+                            prompt: withSystemPrompt(config, prompt),
+                            quality: quality || "auto",
+                            ...(requestSize ? { size: requestSize } : {}),
+                        },
+                        { headers: aiHeaders(config, "application/json") },
+                    )
+                    .then((response) => assertApiSuccess(response.data, "图片任务提交失败")),
+            ),
+        );
+        const images = (await Promise.all(taskIds.map((taskId) => pollImageTask(config, taskId)))).flat();
+        refreshRemoteUser(config);
+        return images;
+    } catch (error) {
+        throw new Error(readAxiosError(error, "请求失败"));
+    }
+}
+
+// requestImageTaskEdit 提交图生图任务并轮询返回图片 URL。
+async function requestImageTaskEdit(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, quality: string | undefined, requestSize: string | undefined) {
+    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    const taskIds = Array.from({ length: count }, () => newImageTaskId("edit"));
+    try {
+        await Promise.all(
+            taskIds.map((taskId) => {
+                const formData = new FormData();
+                formData.set("client_task_id", taskId);
+                formData.set("model", config.model);
+                formData.set("prompt", withSystemPrompt(config, prompt));
+                formData.set("quality", quality || "auto");
+                if (requestSize) {
+                    formData.set("size", requestSize);
+                }
+                files.forEach((file) => formData.append("image", file));
+                return axios.post<ImageTask>(aiImageTaskUrl(config, "/image-tasks/edits"), formData, { headers: aiHeaders(config) }).then((response) => assertApiSuccess(response.data, "图片任务提交失败"));
+            }),
+        );
+        const images = (await Promise.all(taskIds.map((taskId) => pollImageTask(config, taskId)))).flat();
+        refreshRemoteUser(config);
+        return images;
+    } catch (error) {
+        throw new Error(readAxiosError(error, "请求失败"));
+    }
+}
+
 function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) {
     const systemPrompt = config.systemPrompt.trim();
     return systemPrompt ? [{ role: "system" as const, content: systemPrompt }, ...messages] : messages;
@@ -154,6 +292,9 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
+    if (isImageTaskModel(config)) {
+        return requestImageTaskGeneration(config, prompt, n, quality, requestSize);
+    }
     try {
         const response = await axios.post<ImageApiResponse>(
             aiApiUrl(config, "/images/generations"),
@@ -181,6 +322,9 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
+    if (isImageTaskModel(config)) {
+        return requestImageTaskEdit(config, prompt, references, n, quality, requestSize);
+    }
     const formData = new FormData();
     formData.set("model", config.model);
     formData.set("prompt", withSystemPrompt(config, prompt));

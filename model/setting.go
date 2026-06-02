@@ -9,6 +9,12 @@ const (
 	SettingKeyPrivate SettingKey = "private"
 )
 
+// 模型渠道协议，用于区分普通 OpenAI 兼容接口和 chatgpt2api 图片任务接口。
+const (
+	ModelChannelProtocolOpenAI     = "openai"
+	ModelChannelProtocolImageTasks = "image_tasks"
+)
+
 // ModelChannel 模型渠道配置。
 type ModelChannel struct {
 	Protocol string   `json:"protocol"`
@@ -29,14 +35,15 @@ type ModelCost struct {
 
 // PublicModelChannelSetting 公开模型渠道配置。
 type PublicModelChannelSetting struct {
-	AvailableModels    []string    `json:"availableModels"`
-	ModelCosts         []ModelCost `json:"modelCosts"`
-	DefaultModel       string      `json:"defaultModel"`
-	DefaultImageModel  string      `json:"defaultImageModel"`
-	DefaultVideoModel  string      `json:"defaultVideoModel"`
-	DefaultTextModel   string      `json:"defaultTextModel"`
-	SystemPrompt       string      `json:"systemPrompt"`
-	AllowCustomChannel *bool       `json:"allowCustomChannel"`
+	AvailableModels    []string          `json:"availableModels"`
+	ModelProtocols     map[string]string `json:"modelProtocols"`
+	ModelCosts         []ModelCost       `json:"modelCosts"`
+	DefaultModel       string            `json:"defaultModel"`
+	DefaultImageModel  string            `json:"defaultImageModel"`
+	DefaultVideoModel  string            `json:"defaultVideoModel"`
+	DefaultTextModel   string            `json:"defaultTextModel"`
+	SystemPrompt       string            `json:"systemPrompt"`
+	AllowCustomChannel *bool             `json:"allowCustomChannel"`
 }
 
 // PublicSetting 公开配置。

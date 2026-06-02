@@ -19,6 +19,7 @@ export type AiConfig = {
     vquality: string;
     systemPrompt: string;
     models: string[];
+    modelProtocols: Record<string, "openai" | "image_tasks">;
     quality: string;
     size: string;
     count: string;
@@ -38,6 +39,7 @@ export const defaultConfig: AiConfig = {
     vquality: "720",
     systemPrompt: "",
     models: [],
+    modelProtocols: {},
     quality: "auto",
     size: "1:1",
     count: "1",
@@ -70,6 +72,7 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         imageModel: models.includes(config.imageModel) ? config.imageModel : modelChannel.defaultImageModel || fallbackModel,
         videoModel: models.includes(config.videoModel) ? config.videoModel : modelChannel.defaultVideoModel || fallbackModel,
         textModel: models.includes(config.textModel) ? config.textModel : modelChannel.defaultTextModel || fallbackModel,
+        modelProtocols: modelChannel.modelProtocols || {},
         systemPrompt: modelChannel.systemPrompt,
     };
 }

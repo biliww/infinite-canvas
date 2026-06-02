@@ -16,7 +16,12 @@ import (
 
 func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
-	return normalizePublicSetting(settings.Public), err
+	if err != nil {
+		return model.PublicSetting{}, err
+	}
+	settings = normalizeSettings(settings)
+	settings.Public.ModelChannel.ModelProtocols = publicModelProtocols(settings.Public.ModelChannel.AvailableModels, settings.Private.Channels)
+	return settings.Public, nil
 }
 
 func AdminSettings() (model.Settings, error) {
@@ -65,6 +70,9 @@ func normalizePublicSetting(setting model.PublicSetting) model.PublicSetting {
 	if setting.ModelChannel.AvailableModels == nil {
 		setting.ModelChannel.AvailableModels = []string{}
 	}
+	if setting.ModelChannel.ModelProtocols == nil {
+		setting.ModelChannel.ModelProtocols = map[string]string{}
+	}
 	if setting.ModelChannel.ModelCosts == nil {
 		setting.ModelChannel.ModelCosts = []model.ModelCost{}
 	}
@@ -83,6 +91,35 @@ func normalizePublicSetting(setting model.PublicSetting) model.PublicSetting {
 		setting.Auth.AllowRegister = &enabled
 	}
 	return setting
+}
+
+// publicModelProtocols 根据启用渠道计算公开模型对应的协议，供前端决定图片请求走同步还是异步任务。
+func publicModelProtocols(availableModels []string, channels []model.ModelChannel) map[string]string {
+	result := map[string]string{}
+	availableSet := map[string]bool{}
+	for _, modelName := range availableModels {
+		modelName = strings.TrimSpace(modelName)
+		if modelName != "" {
+			availableSet[modelName] = true
+			result[modelName] = model.ModelChannelProtocolOpenAI
+		}
+	}
+	for _, channel := range channels {
+		channel = normalizeModelChannel(channel)
+		if !channel.Enabled {
+			continue
+		}
+		for _, modelName := range channel.Models {
+			modelName = strings.TrimSpace(modelName)
+			if !availableSet[modelName] {
+				continue
+			}
+			if result[modelName] == "" || channel.Protocol == model.ModelChannelProtocolImageTasks {
+				result[modelName] = channel.Protocol
+			}
+		}
+	}
+	return result
 }
 
 func ModelCost(modelName string) (int, error) {
@@ -106,7 +143,7 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 	setting.PromptSync = normalizePromptSyncSetting(setting.PromptSync)
 	for i := range setting.Channels {
 		if setting.Channels[i].Protocol == "" {
-			setting.Channels[i].Protocol = "openai"
+			setting.Channels[i].Protocol = model.ModelChannelProtocolOpenAI
 		}
 		if setting.Channels[i].Models == nil {
 			setting.Channels[i].Models = []string{}
@@ -156,13 +193,18 @@ func findSavedChannel(channel model.ModelChannel, saved []model.ModelChannel, in
 }
 
 func SelectModelChannel(modelName string) (model.ModelChannel, error) {
+	return SelectModelChannelByProtocol(modelName, model.ModelChannelProtocolOpenAI)
+}
+
+// SelectModelChannelByProtocol 按模型名称和渠道协议选择一个可用渠道，避免同步接口误选异步任务渠道。
+func SelectModelChannelByProtocol(modelName string, protocol string) (model.ModelChannel, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return model.ModelChannel{}, err
 	}
-	channels := modelChannelsForModel(normalizePrivateSetting(settings.Private).Channels, modelName)
+	channels := modelChannelsForModelByProtocol(normalizePrivateSetting(settings.Private).Channels, modelName, protocol)
 	if len(channels) == 0 {
-		return model.ModelChannel{}, errors.New("没有可用模型渠道")
+		return model.ModelChannel{}, safeMessageError{message: missingModelChannelMessage(protocol)}
 	}
 	total := 0
 	for _, channel := range channels {
@@ -178,6 +220,31 @@ func SelectModelChannel(modelName string) (model.ModelChannel, error) {
 	return channels[0], nil
 }
 
+// ModelChannelsForModel 返回普通 OpenAI 协议下支持指定模型的所有渠道。
+func ModelChannelsForModel(modelName string) ([]model.ModelChannel, error) {
+	return ModelChannelsForModelByProtocol(modelName, model.ModelChannelProtocolOpenAI)
+}
+
+// ModelChannelsForModelByProtocol 返回指定协议下支持某个模型的所有渠道，主要用于任务查询时定位原上游。
+func ModelChannelsForModelByProtocol(modelName string, protocol string) ([]model.ModelChannel, error) {
+	settings, err := repository.GetSettings()
+	if err != nil {
+		return nil, err
+	}
+	channels := modelChannelsForModelByProtocol(normalizePrivateSetting(settings.Private).Channels, modelName, protocol)
+	if len(channels) == 0 {
+		return nil, safeMessageError{message: missingModelChannelMessage(protocol)}
+	}
+	return channels, nil
+}
+
+// BuildModelChannelRootURL 使用渠道根地址拼接非 /v1 路径，供 image_tasks 这类根路径协议使用。
+func BuildModelChannelRootURL(channel model.ModelChannel, path string) string {
+	baseURL := strings.TrimRight(channel.BaseURL, "/")
+	baseURL = strings.TrimSuffix(baseURL, "/v1")
+	return baseURL + path
+}
+
 func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 	baseURL := strings.TrimRight(channel.BaseURL, "/")
 	if !strings.HasSuffix(baseURL, "/v1") {
@@ -188,7 +255,7 @@ func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 
 func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	if channel.Protocol == "" {
-		channel.Protocol = "openai"
+		channel.Protocol = model.ModelChannelProtocolOpenAI
 	}
 	if channel.Models == nil {
 		channel.Models = []string{}
@@ -340,10 +407,15 @@ func (err safeMessageError) SafeMessage() string {
 	return err.message
 }
 
-func modelChannelsForModel(channels []model.ModelChannel, modelName string) []model.ModelChannel {
+func modelChannelsForModelByProtocol(channels []model.ModelChannel, modelName string, protocol string) []model.ModelChannel {
 	result := []model.ModelChannel{}
+	protocol = strings.TrimSpace(protocol)
 	for _, channel := range channels {
+		channel = normalizeModelChannel(channel)
 		if !channel.Enabled || channel.BaseURL == "" || channel.APIKey == "" {
+			continue
+		}
+		if protocol != "" && channel.Protocol != protocol {
 			continue
 		}
 		for _, item := range channel.Models {
@@ -354,4 +426,12 @@ func modelChannelsForModel(channels []model.ModelChannel, modelName string) []mo
 		}
 	}
 	return result
+}
+
+func missingModelChannelMessage(protocol string) string {
+	protocol = strings.TrimSpace(protocol)
+	if protocol == "" || protocol == model.ModelChannelProtocolOpenAI {
+		return "没有可用模型渠道"
+	}
+	return fmt.Sprintf("没有可用 %s 模型渠道", protocol)
 }

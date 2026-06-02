@@ -11,6 +11,10 @@ import { fetchAdminSettings, fetchChannelModels, saveAdminSettings, testChannelM
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
+const channelProtocolOptions = [
+    { label: "OpenAI 兼容接口", value: "openai" },
+    { label: "图片任务接口", value: "image_tasks" },
+];
 const jsonEditorTheme = EditorView.theme({
     "&": { backgroundColor: "var(--ant-color-bg-container)", color: "var(--ant-color-text)" },
     ".cm-content": { caretColor: "var(--ant-color-text)", padding: "12px 0" },
@@ -28,6 +32,7 @@ const emptySettings: AdminSettings = {
     public: {
         modelChannel: {
             availableModels: [],
+            modelProtocols: {},
             modelCosts: [],
             defaultModel: "",
             defaultImageModel: "",
@@ -633,7 +638,7 @@ export default function AdminSettingsPage() {
                             </Col>
                             <Col span={12}>
                                 <Form.Item name="protocol" label="协议">
-                                    <Select options={[{ label: "OpenAI", value: "openai" }]} />
+                                    <Select options={channelProtocolOptions} />
                                 </Form.Item>
                             </Col>
                             <Col span={12}>
@@ -833,6 +838,7 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
             ...emptySettings.public.modelChannel,
             ...(setting.modelChannel || {}),
             availableModels: setting.modelChannel?.availableModels || [],
+            modelProtocols: setting.modelChannel?.modelProtocols || {},
             modelCosts: normalizeModelCosts(setting.modelChannel?.modelCosts || []),
         },
         auth: {
@@ -866,7 +872,7 @@ function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}
 
 function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChannel {
     return {
-        protocol: "openai",
+        protocol: item.protocol === "image_tasks" ? "image_tasks" : "openai",
         name: item.name || "",
         baseUrl: item.baseUrl || "",
         apiKey: item.apiKey || "",

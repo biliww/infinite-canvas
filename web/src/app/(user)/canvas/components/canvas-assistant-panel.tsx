@@ -414,7 +414,7 @@ function AssistantComposer({
                         onPasteImage(file);
                     }}
                     onKeyDown={(event) => {
-                        if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                        if (event.key !== "Enter" || event.nativeEvent.isComposing || (!event.ctrlKey && !event.metaKey)) return;
                         event.preventDefault();
                         void onSubmit();
                     }}

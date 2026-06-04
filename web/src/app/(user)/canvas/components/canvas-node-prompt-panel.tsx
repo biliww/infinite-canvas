@@ -66,7 +66,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 value={prompt}
                 onChange={(event) => updatePrompt(event.target.value)}
                 onKeyDown={(event) => {
-                    if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                    if (event.key !== "Enter" || event.nativeEvent.isComposing || (!event.ctrlKey && !event.metaKey)) return;
                     event.preventDefault();
                     submit();
                 }}
